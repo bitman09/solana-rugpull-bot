@@ -1,12 +1,12 @@
 {
 	"name": "PumpFun-Bundler",
 	"version": "1.0.0",
-	"description": "https://solana-scripts.com",
+	"description": "",
 	"main": "index.js",
 	"scripts": {
 		"start": "ts-node jitoPool.ts"
 	},
-	"author": "https://solana-scripts.com",
+	"author": "",
 	"license": "ISC",
 	"dependencies": {
 		"@coral-xyz/anchor": "^0.29.0",
