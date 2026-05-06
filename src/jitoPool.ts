@@ -1,9 +1,8 @@
-import { connection, wallet, PUMP_PROGRAM, feeRecipient, eventAuthority, global, MPL_TOKEN_METADATA_PROGRAM_ID, mintAuthority, rpc, payer } from "../config";
+import { connection, wallet, payer } from "../config";
 import {
 	PublicKey,
 	VersionedTransaction,
 	TransactionInstruction,
-	SYSVAR_RENT_PUBKEY,
 	TransactionMessage,
 	SystemProgram,
 	Keypair,
@@ -14,26 +13,21 @@ import { loadKeypairs } from "./createKeys";
 import { searcherClient } from "./clients/jito";
 import { Bundle as JitoBundle } from "jito-ts/dist/sdk/block-engine/types.js";
 import promptSync from "prompt-sync";
-import * as spl from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import bs58 from "bs58";
 import path from "path";
 import fs from "fs";
-import { Program } from "@coral-xyz/anchor";
 import { getRandomTipAccount } from "./clients/config";
 import BN from "bn.js";
 import axios from "axios";
-import * as anchor from "@coral-xyz/anchor";
+import type { Global } from "@pump-fun/pump-sdk";
+import { PUMP_SDK, OnlinePumpSdk, bondingCurvePda } from "@pump-fun/pump-sdk";
 
 const prompt = promptSync();
 const keyInfoPath = path.join(__dirname, "keyInfo.json");
 
 export async function buyBundle() {
-	const provider = new anchor.AnchorProvider(new anchor.web3.Connection(rpc), new anchor.Wallet(wallet), { commitment: "confirmed" });
-
-	// Initialize pumpfun anchor
-	const IDL_PumpFun = JSON.parse(fs.readFileSync("./pumpfun-IDL.json", "utf-8")) as anchor.Idl;
-
-	const program = new anchor.Program(IDL_PumpFun, PUMP_PROGRAM, provider);
+	const onlineSdk = new OnlinePumpSdk(connection);
 
 	// Start create bundle
 	const bundledTxns: VersionedTransaction[] = [];
@@ -77,7 +71,7 @@ export async function buyBundle() {
 
 	let formData = new FormData();
 	if (data) {
-		formData.append("file", new Blob([data], { type: "image/jpeg" }));
+		formData.append("file", new Blob([new Uint8Array(data)], { type: "image/jpeg" }));
 	} else {
 		console.log("No image found");
 		return;
@@ -104,60 +98,36 @@ export async function buyBundle() {
 		console.error("Error uploading metadata:", error);
 	}
 
+	if (!metadata_uri) {
+		console.log("Missing metadata URI; aborting.");
+		return;
+	}
+
 	const mintKp = Keypair.fromSecretKey(Uint8Array.from(bs58.decode(keyInfo.mintPk)));
 	console.log(`Mint: ${mintKp.publicKey.toBase58()}`);
 
-	const [bondingCurve] = PublicKey.findProgramAddressSync([Buffer.from("bonding-curve"), mintKp.publicKey.toBytes()], program.programId);
-	const [metadata] = PublicKey.findProgramAddressSync(
-		[Buffer.from("metadata"), MPL_TOKEN_METADATA_PROGRAM_ID.toBytes(), mintKp.publicKey.toBytes()],
-		MPL_TOKEN_METADATA_PROGRAM_ID
-	);
+	const globalState = await onlineSdk.fetchGlobal();
 
-	const account1 = mintKp.publicKey;
-	const account2 = mintAuthority;
-	const account3 = bondingCurve;
-	const account5 = global;
-	const account6 = MPL_TOKEN_METADATA_PROGRAM_ID;
-	const account7 = metadata;
+	const keypairInfo = keyInfo[wallet.publicKey.toString()];
+	if (!keypairInfo) {
+		console.log(`No key info found for dev wallet: ${wallet.publicKey.toString()}`);
+		return;
+	}
 
-	const createIx = await program.methods
-		.create(name, symbol, metadata_uri)
-		.accounts({
-			mint: account1,
-			mintAuthority: account2,
-			systemProgram: SystemProgram.programId,
-			tokenProgram: spl.TOKEN_PROGRAM_ID,
-			associatedTokenProgram: spl.ASSOCIATED_TOKEN_PROGRAM_ID,
-			rent: SYSVAR_RENT_PUBKEY,
-			eventAuthority,
-			program: PUMP_PROGRAM,
-		})
-		.instruction();
-
-	// Get the associated token address
-	const ata = spl.getAssociatedTokenAddressSync(mintKp.publicKey, wallet.publicKey);
-	const ataIx = spl.createAssociatedTokenAccountIdempotentInstruction(wallet.publicKey, ata, wallet.publicKey, mintKp.publicKey);
-
-	// Extract tokenAmount from keyInfo for this keypair
-	// const keypairInfo = keyInfo[wallet.publicKey.toString()];
-	// if (!keypairInfo) {
-	// 	console.log(`No key info found for keypair: ${wallet.publicKey.toString()}`);
-	// }
-
-	// Calculate SOL amount based on tokenAmount
 	const amount = new BN(keypairInfo.tokenAmount);
 	const solAmount = new BN(100000 * keypairInfo.solAmount * LAMPORTS_PER_SOL);
 
-	const buyIx = await program.methods
-		.buy(amount, solAmount)
-		.accounts({
-			systemProgram: SystemProgram.programId,
-			tokenProgram: spl.TOKEN_PROGRAM_ID,
-			rent: SYSVAR_RENT_PUBKEY,
-			eventAuthority,
-			program: PUMP_PROGRAM,
-		})
-		.instruction();
+	const createAndBuyIxs = await PUMP_SDK.createAndBuyInstructions({
+		global: globalState,
+		mint: mintKp.publicKey,
+		name,
+		symbol,
+		uri: metadata_uri,
+		creator: wallet.publicKey,
+		user: wallet.publicKey,
+		amount,
+		solAmount,
+	});
 
 	const tipIxn = SystemProgram.transfer({
 		fromPubkey: wallet.publicKey,
@@ -165,7 +135,7 @@ export async function buyBundle() {
 		lamports: BigInt(tipAmt),
 	});
 
-	const initIxs: TransactionInstruction[] = [createIx, ataIx, buyIx, tipIxn];
+	const initIxs: TransactionInstruction[] = [...createAndBuyIxs, tipIxn];
 
 	const { blockhash } = await connection.getLatestBlockhash();
 
@@ -181,7 +151,13 @@ export async function buyBundle() {
 	bundledTxns.push(fullTX);
 
 	// -------- step 3: create swap txns --------
-	const txMainSwaps: VersionedTransaction[] = await createWalletSwaps(blockhash, keypairs, lookupTableAccount, bondingCurve, mintKp.publicKey, program);
+	const txMainSwaps: VersionedTransaction[] = await createWalletSwaps(
+		blockhash,
+		keypairs,
+		lookupTableAccount,
+		mintKp.publicKey,
+		globalState
+	);
 	bundledTxns.push(...txMainSwaps);
 
 	// -------- step 4: send bundle --------
@@ -211,70 +187,76 @@ async function createWalletSwaps(
 	blockhash: string,
 	keypairs: Keypair[],
 	lut: AddressLookupTableAccount,
-	bondingCurve: PublicKey,
-	associatedBondingCurve: PublicKey,
 	mint: PublicKey,
-	program: Program
+	globalState: Global
 ): Promise<VersionedTransaction[]> {
 	const txsSigned: VersionedTransaction[] = [];
 	const chunkedKeypairs = chunkArray(keypairs, 6);
 
-	// Load keyInfo data from JSON file
 	let keyInfo: { [key: string]: { solAmount: number; tokenAmount: string; percentSupply: number } } = {};
 	if (fs.existsSync(keyInfoPath)) {
 		const existingData = fs.readFileSync(keyInfoPath, "utf-8");
 		keyInfo = JSON.parse(existingData);
 	}
 
-	// Iterate over each chunk of keypairs
+	const bondingCurvePk = bondingCurvePda(mint);
+	const bondingCurveAccountInfo = await connection.getAccountInfo(bondingCurvePk);
+	if (!bondingCurveAccountInfo) {
+		console.log("Bonding curve account not found for mint.");
+		return txsSigned;
+	}
+	const bondingCurve = PUMP_SDK.decodeBondingCurve(bondingCurveAccountInfo);
+
 	for (let chunkIndex = 0; chunkIndex < chunkedKeypairs.length; chunkIndex++) {
 		const chunk = chunkedKeypairs[chunkIndex];
 		const instructionsForChunk: TransactionInstruction[] = [];
 
-		// Iterate over each keypair in the chunk to create swap instructions
 		for (let i = 0; i < chunk.length; i++) {
 			const keypair = chunk[i];
 			console.log(`Processing keypair ${i + 1}/${chunk.length}:`, keypair.publicKey.toString());
 
-			const ataAddress = await spl.getAssociatedTokenAddress(mint, keypair.publicKey);
-
-			const createTokenAta = spl.createAssociatedTokenAccountIdempotentInstruction(payer.publicKey, ataAddress, keypair.publicKey, mint);
-
-			// Extract tokenAmount from keyInfo for this keypair
 			const keypairInfo = keyInfo[keypair.publicKey.toString()];
 			if (!keypairInfo) {
 				console.log(`No key info found for keypair: ${keypair.publicKey.toString()}`);
 				continue;
 			}
 
-			// Calculate SOL amount based on tokenAmount
 			const amount = new BN(keypairInfo.tokenAmount);
 			const solAmount = new BN(100000 * keypairInfo.solAmount * LAMPORTS_PER_SOL);
 
-			const buyIx = await program.methods
-				.buy(amount, solAmount)
-				.accounts({
-					systemProgram: SystemProgram.programId,
-					tokenProgram: spl.TOKEN_PROGRAM_ID,
-					rent: SYSVAR_RENT_PUBKEY,
-					eventAuthority,
-					program: PUMP_PROGRAM,
-				})
-				.instruction();
+			const associatedUser = getAssociatedTokenAddressSync(mint, keypair.publicKey, true, TOKEN_PROGRAM_ID);
+			const associatedUserAccountInfo = await connection.getAccountInfo(associatedUser);
 
-			instructionsForChunk.push(createTokenAta, buyIx);
+			const buyIxs = await PUMP_SDK.buyInstructions({
+				global: globalState,
+				bondingCurveAccountInfo,
+				bondingCurve,
+				associatedUserAccountInfo,
+				mint,
+				user: keypair.publicKey,
+				amount,
+				solAmount,
+				slippage: 1,
+				tokenProgram: TOKEN_PROGRAM_ID,
+			});
+
+			instructionsForChunk.push(...buyIxs);
 		}
 
+		if (instructionsForChunk.length === 0) {
+			continue;
+		}
 
 		const message = new TransactionMessage({
-			payerKey: keypair.publicKey,
+			payerKey: payer.publicKey,
 			recentBlockhash: blockhash,
 			instructions: instructionsForChunk,
 		}).compileToV0Message([lut]);
 
-		const serializedMsg = message.serialize();
-		console.log("Txn size:", message.length);
-		if (message.length > 1232) {
+		const versionedTx = new VersionedTransaction(message);
+		const serializedMsg = versionedTx.serialize();
+		console.log("Txn size:", serializedMsg.length);
+		if (serializedMsg.length > 1232) {
 			console.log("tx too big");
 		}
 
@@ -283,15 +265,7 @@ async function createWalletSwaps(
 			chunk.map((kp) => kp.publicKey.toString())
 		);
 
-		// Sign with the wallet for tip on the last instruction
-		for (const kp of chunk) {
-			if (kp.publicKey.toString() in keyInfo) {
-				versionedTx.sign([kp]);
-			}
-		}
-
-		versionedTx.sign([payer]);
-
+		versionedTx.sign([payer, ...chunk]);
 		txsSigned.push(versionedTx);
 	}
 

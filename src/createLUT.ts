@@ -1,7 +1,7 @@
 import { AddressLookupTableProgram, Keypair, PublicKey, VersionedTransaction, TransactionMessage, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL, Blockhash, AddressLookupTableAccount, SYSVAR_RENT_PUBKEY } from '@solana/web3.js';
 import fs from 'fs';
 import path from 'path';
-import { wallet, connection, PUMP_PROGRAM, payer } from '../config';
+import { wallet, connection, PUMP_PROGRAM, payer } from "../config";
 import promptSync from 'prompt-sync';
 import { searcherClient } from "./clients/jito";
 import { Bundle as JitoBundle } from 'jito-ts/dist/sdk/block-engine/types.js';
@@ -9,18 +9,11 @@ import { getRandomTipAccount } from "./clients/config";
 import { lookupTableProvider } from "./clients/LookupTableProvider";
 import { loadKeypairs } from './createKeys';
 import * as spl from '@solana/spl-token';
-import idl from "../pumpfun-IDL.json";
-import { Program, Idl, AnchorProvider, setProvider } from "@coral-xyz/anchor";
-import { bs58 } from '@project-serum/anchor/dist/cjs/utils/bytes';
+import bs58 from "bs58";
+import { bondingCurvePda } from "@pump-fun/pump-sdk";
 
 const prompt = promptSync();
-const keyInfoPath = path.join(__dirname, 'keyInfo.json');
-
-const provider = new AnchorProvider(connection, wallet as any, {});
-
-setProvider(provider);
-
-const program = new Program(idl as Idl, PUMP_PROGRAM);
+const keyInfoPath = path.join(__dirname, "keyInfo.json");
 
 export async function extendLUT() {
     // -------- step 1: ask nessesary questions for LUT build --------
@@ -78,10 +71,7 @@ export async function extendLUT() {
         "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
     );
     const global = new PublicKey("4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf");
-    const [bondingCurve] = PublicKey.findProgramAddressSync(
-        [Buffer.from("bonding-curve"), mintKp.publicKey.toBytes()],
-        program.programId,
-    );
+    const bondingCurve = bondingCurvePda(mintKp.publicKey);
     const [metadata] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("metadata"),
@@ -113,7 +103,6 @@ export async function extendLUT() {
         MPL_TOKEN_METADATA_PROGRAM_ID,
         mintAuthority,
         global,
-        program.programId,
         PUMP_PROGRAM,
         metadata,
         associatedBondingCurve,

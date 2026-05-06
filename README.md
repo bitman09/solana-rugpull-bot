@@ -17,7 +17,7 @@ import { buyBundle } from "./src/jitoPool";
 import { sender } from "./src/senderUI";
 import { sellXPercentagePF } from "./src/sellFunc";
 import promptSync from "prompt-sync";
-import { sellXPercentageRAY } from "./src/sellRay";
+import { sellXPercentagePumpSwap } from "./src/sellPumpSwap";
 
 const prompt = promptSync();
 
@@ -33,7 +33,7 @@ async function main() {
 		console.log("2. Pre Launch Checklist");
 		console.log("3. Create Pool Bundle");
 		console.log("4. Sell % of Supply on Pump.Fun");
-		console.log("5. Sell % of Supply on Raydium");
+		console.log("5. Sell % of Supply on Pump Swap");
 		console.log("Type 'exit' to quit.");
 
 		const answer = prompt("Choose an option or 'exit': "); // Use prompt-sync for user input
@@ -52,7 +52,7 @@ async function main() {
 				await sellXPercentagePF();
 				break;
 			case "5":
-				await sellXPercentageRAY();
+				await sellXPercentagePumpSwap();
 				break;
 			case "exit":
 				running = false;
@@ -76,7 +76,6 @@ main().catch((err) => {
  - LookupTableProvider.ts
  - config.ts
  - jito.ts
- - poolKeysReassigned.ts
 ```
 
 ### src/keypairs
@@ -91,7 +90,7 @@ main().catch((err) => {
  - jitoPool.ts
  - keyInfo.json
  - sellFunc.ts
- - sellRay.ts
+ - sellPumpSwap.ts
  - senderUI.ts
 ```
 

@@ -3,7 +3,8 @@ import { buyBundle } from "./src/jitoPool";
 import { sender } from "./src/senderUI";
 import { sellXPercentagePF } from "./src/sellFunc";
 import promptSync from "prompt-sync";
-import { sellXPercentageRAY } from "./src/sellRay";
+import { logger } from "pretty-pino-loggers";
+import { sellXPercentagePumpSwap } from "./src/sellPumpSwap";
 
 const prompt = promptSync();
 
@@ -11,15 +12,13 @@ async function main() {
 	let running = true;
 
 	while (running) {
-		console.log("DM me for support");
-		console.log("https://t.me/benorizz0");
-		console.log("solana-scripts.com");
+		logger.info("\nPumpFun-Rugpuller:");
 		console.log("\nMenu:");
 		console.log("1. Create Keypairs");
 		console.log("2. Pre Launch Checklist");
 		console.log("3. Create Pool Bundle");
 		console.log("4. Sell % of Supply on Pump.Fun");
-		console.log("5. Sell % of Supply on Raydium");
+		console.log("5. Sell % of Supply on Pump Swap");
 		console.log("Type 'exit' to quit.");
 
 		const answer = prompt("Choose an option or 'exit': "); // Use prompt-sync for user input
@@ -38,7 +37,7 @@ async function main() {
 				await sellXPercentagePF();
 				break;
 			case "5":
-				await sellXPercentageRAY();
+				await sellXPercentagePumpSwap();
 				break;
 			case "exit":
 				running = false;

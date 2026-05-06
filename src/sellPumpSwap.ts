@@ -3,71 +3,43 @@ import {
 	PublicKey,
 	VersionedTransaction,
 	TransactionMessage,
-	TransactionInstruction,
 	SystemProgram,
 	Keypair,
 	LAMPORTS_PER_SOL,
+	TransactionInstruction,
 } from "@solana/web3.js";
 import { loadKeypairs } from "./createKeys";
 import { searcherClient } from "./clients/jito";
 import { Bundle as JitoBundle } from "jito-ts/dist/sdk/block-engine/types.js";
 import promptSync from "prompt-sync";
 import * as spl from "@solana/spl-token";
-import bs58 from "bs58";
 import path from "path";
 import fs from "fs";
 import { randomInt } from "crypto";
 import { getRandomTipAccount } from "./clients/config";
 import BN from "bn.js";
-import { PUMP_SDK, OnlinePumpSdk, bondingCurvePda } from "@pump-fun/pump-sdk";
+import {
+	OnlinePumpAmmSdk,
+	PUMP_AMM_SDK,
+	canonicalPumpPoolPda,
+} from "@pump-fun/pump-swap-sdk";
 
 const prompt = promptSync();
 const keyInfoPath = path.join(__dirname, "keyInfo.json");
+const SLIPPAGE_PERCENT = 1;
 
 function chunkArray<T>(array: T[], size: number): T[][] {
-	return Array.from({ length: Math.ceil(array.length / size) }, (v, i) => array.slice(i * size, i * size + size));
+	return Array.from({ length: Math.ceil(array.length / size) }, (v, i) =>
+		array.slice(i * size, i * size + size)
+	);
 }
 
 async function sendBundle(bundledTxns: VersionedTransaction[]) {
-	/*
-    // Simulate each transaction
-    for (const tx of bundledTxns) {
-        try {
-            const simulationResult = await connection.simulateTransaction(tx, { commitment: "processed" });
-
-            if (simulationResult.value.err) {
-                console.error("Simulation error for transaction:", simulationResult.value.err);
-            } else {
-                console.log("Simulation success for transaction. Logs:");
-                simulationResult.value.logs?.forEach(log => console.log(log));
-            }
-        } catch (error) {
-            console.error("Error during simulation:", error);
-        }
-    }
-    */
-
 	try {
-		const bundleId = await searcherClient.sendBundle(new JitoBundle(bundledTxns, bundledTxns.length));
+		const bundleId = await searcherClient.sendBundle(
+			new JitoBundle(bundledTxns, bundledTxns.length)
+		);
 		console.log(`Bundle ${bundleId} sent.`);
-
-		/*
-        // Assuming onBundleResult returns a Promise<BundleResult>
-        const result = await new Promise((resolve, reject) => {
-            searcherClient.onBundleResult(
-            (result) => {
-                console.log('Received bundle result:', result);
-                resolve(result); // Resolve the promise with the result
-            },
-            (e: Error) => {
-                console.error('Error receiving bundle result:', e);
-                reject(e); // Reject the promise if there's an error
-            }
-            );
-        });
-    
-        console.log('Result:', result);
-        */
 	} catch (error) {
 		const err = error as any;
 		console.error("Error sending bundle:", err.message);
@@ -80,13 +52,13 @@ async function sendBundle(bundledTxns: VersionedTransaction[]) {
 	}
 }
 
-export async function sellXPercentagePF() {
-	const onlineSdk = new OnlinePumpSdk(connection);
-	const globalState = await onlineSdk.fetchGlobal();
-
-	// Start selling
-	const bundledTxns = [];
-	const keypairs = loadKeypairs(); // Ensure this function is correctly defined to load your Keypairs
+/**
+ * Sell a percentage of holdings after the token has migrated to Pump Swap
+ * (canonical pool for this mint).
+ */
+export async function sellXPercentagePumpSwap() {
+	const bundledTxns: VersionedTransaction[] = [];
+	const keypairs = loadKeypairs();
 
 	let poolInfo: { [key: string]: any } = {};
 	if (fs.existsSync(keyInfoPath)) {
@@ -95,7 +67,6 @@ export async function sellXPercentagePF() {
 	}
 
 	const lut = new PublicKey(poolInfo.addressLUT.toString());
-
 	const lookupTableAccount = (await connection.getAddressLookupTable(lut)).value;
 
 	if (lookupTableAccount == null) {
@@ -103,54 +74,76 @@ export async function sellXPercentagePF() {
 		process.exit(0);
 	}
 
-	const mintKp = Keypair.fromSecretKey(Uint8Array.from(bs58.decode(poolInfo.mintPk)));
-	//console.log(`Mint: ${mintKp.publicKey.toBase58()}`);
+	const mintPk = new PublicKey(poolInfo.mint);
+	const poolKey = canonicalPumpPoolPda(mintPk);
+	const ammOnline = new OnlinePumpAmmSdk(connection);
+
+	let pool;
+	try {
+		pool = await ammOnline.fetchPool(poolKey);
+	} catch {
+		console.log("Pump Swap pool not found for this mint. Confirm the token has migrated.");
+		return;
+	}
 
 	const supplyPercent = +prompt("Percentage to sell (Ex. 1 for 1%): ") / 100;
 	const jitoTipAmt = +prompt("Jito tip in Sol (Ex. 0.01): ") * LAMPORTS_PER_SOL;
 
-	const mintInfo = await connection.getTokenSupply(mintKp.publicKey);
+	if (supplyPercent > 0.25) {
+		console.log("You cannot sell over 25% at a time.");
+		console.log("The price impact is too high.");
+		return;
+	}
+
+	const mintInfo = await connection.getTokenSupply(mintPk);
 
 	let sellTotalAmount = 0;
-
-	const chunkedKeypairs = chunkArray(keypairs, 6); // Adjust chunk size as needed
-
-	// start the selling process
-	const PayerTokenATA = await spl.getAssociatedTokenAddress(new PublicKey(poolInfo.mint), payer.publicKey);
+	const chunkedKeypairs = chunkArray(keypairs, 6);
+	const PayerTokenATA = await spl.getAssociatedTokenAddress(mintPk, payer.publicKey);
+	const PayerwSolATA = await spl.getAssociatedTokenAddress(spl.NATIVE_MINT, payer.publicKey);
 
 	const { blockhash } = await connection.getLatestBlockhash();
 
 	for (let chunkIndex = 0; chunkIndex < chunkedKeypairs.length; chunkIndex++) {
 		const chunk = chunkedKeypairs[chunkIndex];
-		const instructionsForChunk = [];
-		const isFirstChunk = chunkIndex === 0; // Check if this is the first chunk
+		const instructionsForChunk: TransactionInstruction[] = [];
+		const isFirstChunk = chunkIndex === 0;
 
 		if (isFirstChunk) {
-			// Handle the first chunk separately
-			const transferAmount = await getSellBalance(wallet, new PublicKey(poolInfo.mint), supplyPercent);
-			sellTotalAmount += transferAmount; // Keep track to sell at the end
+			const transferAmount = await getSellBalance(wallet, mintPk, supplyPercent);
+			sellTotalAmount += transferAmount;
 			console.log(`Sending ${transferAmount / 1e6} from dev wallet.`);
 
 			const ataIx = spl.createAssociatedTokenAccountIdempotentInstruction(
 				payer.publicKey,
 				PayerTokenATA,
 				payer.publicKey,
-				new PublicKey(poolInfo.mint)
+				mintPk
 			);
 
-			const TokenATA = await spl.getAssociatedTokenAddress(new PublicKey(poolInfo.mint), wallet.publicKey);
-			const transferIx = spl.createTransferInstruction(TokenATA, PayerTokenATA, wallet.publicKey, transferAmount);
+			const TokenATA = await spl.getAssociatedTokenAddress(mintPk, wallet.publicKey);
+			const transferIx = spl.createTransferInstruction(
+				TokenATA,
+				PayerTokenATA,
+				wallet.publicKey,
+				transferAmount
+			);
 
 			instructionsForChunk.push(ataIx, transferIx);
 		}
 
-		for (let keypair of chunk) {
-			const transferAmount = await getSellBalance(keypair, new PublicKey(poolInfo.mint), supplyPercent);
-			sellTotalAmount += transferAmount; // Keep track to sell at the end
+		for (const keypair of chunk) {
+			const transferAmount = await getSellBalance(keypair, mintPk, supplyPercent);
+			sellTotalAmount += transferAmount;
 			console.log(`Sending ${transferAmount / 1e6} from ${keypair.publicKey.toString()}.`);
 
-			const TokenATA = await spl.getAssociatedTokenAddress(new PublicKey(poolInfo.mint), keypair.publicKey);
-			const transferIx = spl.createTransferInstruction(TokenATA, PayerTokenATA, keypair.publicKey, transferAmount);
+			const TokenATA = await spl.getAssociatedTokenAddress(mintPk, keypair.publicKey);
+			const transferIx = spl.createTransferInstruction(
+				TokenATA,
+				PayerTokenATA,
+				keypair.publicKey,
+				transferAmount
+			);
 			instructionsForChunk.push(transferIx);
 		}
 
@@ -162,17 +155,18 @@ export async function sellXPercentagePF() {
 			}).compileToV0Message([lookupTableAccount]);
 
 			const versionedTx = new VersionedTransaction(message);
-
 			const serializedMsg = versionedTx.serialize();
 			console.log("Txn size:", serializedMsg.length);
 			if (serializedMsg.length > 1232) {
 				console.log("tx too big");
 			}
 
-			versionedTx.sign([payer]); // Sign with payer first
-
-			for (let keypair of chunk) {
-				versionedTx.sign([keypair]); // Then sign with each keypair in the chunk
+			versionedTx.sign([payer]);
+			if (isFirstChunk) {
+				versionedTx.sign([wallet]);
+			}
+			for (const keypair of chunk) {
+				versionedTx.sign([keypair]);
 			}
 
 			bundledTxns.push(versionedTx);
@@ -181,42 +175,52 @@ export async function sellXPercentagePF() {
 
 	const payerNum = randomInt(0, 24);
 	const payerKey = keypairs[payerNum];
-
 	const sellPayerIxs: TransactionInstruction[] = [];
 
 	console.log(`TOTAL: Selling ${sellTotalAmount / 1e6}.`);
 
 	if (+mintInfo.value.amount * 0.25 <= sellTotalAmount) {
-		// protect investors from fraud and prevent illegal use
 		console.log("Price impact too high.");
 		console.log("Cannot sell more than 25% of supply at a time.");
-
 		return;
 	}
 
-	const mintPk = new PublicKey(poolInfo.mint);
-	const bondingCurveAccountInfo = await connection.getAccountInfo(bondingCurvePda(mintPk));
-	if (!bondingCurveAccountInfo) {
-		console.log("Bonding curve not found for mint.");
+	let userBaseAta: PublicKey;
+	let userQuoteAta: PublicKey;
+	if (pool.baseMint.equals(mintPk)) {
+		userBaseAta = PayerTokenATA;
+		userQuoteAta = PayerwSolATA;
+	} else if (pool.quoteMint.equals(mintPk)) {
+		userBaseAta = PayerwSolATA;
+		userQuoteAta = PayerTokenATA;
+	} else {
+		console.log("Canonical Pump Swap pool does not list this mint as base or quote.");
 		return;
 	}
-	const bondingCurve = PUMP_SDK.decodeBondingCurve(bondingCurveAccountInfo);
 
-	const sellIxs = await PUMP_SDK.sellInstructions({
-		global: globalState,
-		bondingCurveAccountInfo,
-		bondingCurve,
-		mint: mintPk,
-		user: payer.publicKey,
-		amount: new BN(sellTotalAmount),
-		solAmount: new BN(0),
-		slippage: 1,
-		tokenProgram: spl.TOKEN_PROGRAM_ID,
-		mayhemMode: bondingCurve.isMayhemMode,
-	});
+	const swapState = await ammOnline.swapSolanaState(
+		poolKey,
+		payer.publicKey,
+		userBaseAta,
+		userQuoteAta
+	);
+
+	const sellAmountBn = new BN(sellTotalAmount);
+	let swapIxs: TransactionInstruction[];
+	if (pool.baseMint.equals(mintPk)) {
+		swapIxs = await PUMP_AMM_SDK.sellBaseInput(swapState, sellAmountBn, SLIPPAGE_PERCENT);
+	} else {
+		swapIxs = await PUMP_AMM_SDK.buyQuoteInput(swapState, sellAmountBn, SLIPPAGE_PERCENT);
+	}
 
 	sellPayerIxs.push(
-		...sellIxs,
+		spl.createAssociatedTokenAccountIdempotentInstruction(
+			payer.publicKey,
+			PayerwSolATA,
+			payer.publicKey,
+			spl.NATIVE_MINT
+		),
+		...swapIxs,
 		SystemProgram.transfer({
 			fromPubkey: payer.publicKey,
 			toPubkey: getRandomTipAccount(),
@@ -231,7 +235,6 @@ export async function sellXPercentagePF() {
 	}).compileToV0Message([lookupTableAccount]);
 
 	const sellTx = new VersionedTransaction(sellMessage);
-
 	const serializedMsg = sellTx.serialize();
 	console.log("Txn size:", serializedMsg.length);
 	if (serializedMsg.length > 1232) {
@@ -239,12 +242,9 @@ export async function sellXPercentagePF() {
 	}
 
 	sellTx.sign([payer, payerKey]);
-
 	bundledTxns.push(sellTx);
 
 	await sendBundle(bundledTxns);
-
-	return;
 }
 
 async function getSellBalance(keypair: Keypair, mint: PublicKey, supplyPercent: number) {
@@ -253,9 +253,8 @@ async function getSellBalance(keypair: Keypair, mint: PublicKey, supplyPercent: 
 		const tokenAccountPubKey = spl.getAssociatedTokenAddressSync(mint, keypair.publicKey);
 		const balance = await connection.getTokenAccountBalance(tokenAccountPubKey);
 		amount = Math.floor(Number(balance.value.amount) * supplyPercent);
-	} catch (e) {
+	} catch {
 		amount = 0;
 	}
-
 	return amount;
 }
