@@ -14,7 +14,7 @@ async function main() {
 	let running = true;
 
 	while (running) {
-		logger.info("\nPumpFun-Rugpuller:");
+		logger.info("\nsolana rugpull bot:");
 		console.log("\nMenu:");
 		console.log("1. Create Keypairs");
 		console.log("2. Pre Launch Checklist");

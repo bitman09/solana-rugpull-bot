@@ -1,101 +1,81 @@
-# solana-pumpfun-bundler
-This Solana PumpFun Bundler Bot is your ultimate tool for seamless bundling on Pump.Fun, featuring advanced profile creation and anti-bubble mapping capabilities.
+# Solana Rugpull Bot
 
+A command-line automation toolkit for Pump.Fun workflows on Solana.  
+This project helps streamline keypair generation, launch preparation, pool bundle execution, and percentage-based selling actions through a simple interactive menu.
 
-## Description
-This open-source and free tool provides a highly efficient self-bundling script designed specifically for Pump.Fun, empowering users to launch tokens seamlessly using 20 distinct wallets and profiles.
+## Overview
 
-With its robust features, the tool ensures your token launches are completely secure and protected against bubble map vulnerabilities and Photon SB marks, delivering unparalleled reliability for your projects.
+Solana Rugpull Bot is designed for operators who need fast, repeatable execution across multiple wallets and launch steps.  
+It focuses on practical scripting flows with minimal setup friction.
 
-For users requiring additional advanced functionalities or customization, we invite you to reach out via direct message for tailored solutions and expert support.
+## Key Features
 
-## Project Codebase
-### main.ts
-```
-import { createKeypairs } from "./src/createKeys";
-import { buyBundle } from "./src/jitoPool";
-import { sender } from "./src/senderUI";
-import { sellXPercentagePF } from "./src/sellFunc";
-import promptSync from "prompt-sync";
-import { sellXPercentagePumpSwap } from "./src/sellPumpSwap";
+- Interactive CLI menu for guided operation
+- Keypair generation utilities
+- Pre-launch checklist and sender flow
+- Pool bundle creation support
+- Sell-by-percentage support for:
+  - Pump.Fun
+  - Pump Swap
 
-const prompt = promptSync();
+## Prerequisites
 
-async function main() {
-	let running = true;
+- Node.js 18+ (recommended 20+)
+- npm
+- A configured `.env` file with required runtime values
+- Solana wallet/key material appropriate for your workflow
 
-	while (running) {
-		console.log("DM me for support");
-		console.log("https://t.me/benorizz0");
-		console.log("solana-scripts.com");
-		console.log("\nMenu:");
-		console.log("1. Create Keypairs");
-		console.log("2. Pre Launch Checklist");
-		console.log("3. Create Pool Bundle");
-		console.log("4. Sell % of Supply on Pump.Fun");
-		console.log("5. Sell % of Supply on Pump Swap");
-		console.log("Type 'exit' to quit.");
+## Installation
 
-		const answer = prompt("Choose an option or 'exit': "); // Use prompt-sync for user input
-
-		switch (answer) {
-			case "1":
-				await createKeypairs();
-				break;
-			case "2":
-				await sender();
-				break;
-			case "3":
-				await buyBundle();
-				break;
-			case "4":
-				await sellXPercentagePF();
-				break;
-			case "5":
-				await sellXPercentagePumpSwap();
-				break;
-			case "exit":
-				running = false;
-				break;
-			default:
-				console.log("Invalid option, please choose again.");
-		}
-	}
-
-	console.log("Exiting...");
-	process.exit(0);
-}
-
-main().catch((err) => {
-	console.error("Error:", err);
-});
+```bash
+npm install
 ```
 
-### src/clients
-```
- - LookupTableProvider.ts
- - config.ts
- - jito.ts
+## Run
+
+```bash
+npm run start
 ```
 
-### src/keypairs
-```
- - keypair1.json
+After launch, select one of the menu options:
+
+1. Create Keypairs
+2. Pre Launch Checklist
+3. Create Pool Bundle
+4. Sell % of Supply on Pump.Fun
+5. Sell % of Supply on Pump Swap
+
+Type `exit` to quit.
+
+## Project Structure
+
+```text
+.
+├── main.ts
+├── config.ts
+├── src/
+│   ├── createKeys.ts
+│   ├── createLUT.ts
+│   ├── jitoPool.ts
+│   ├── keyInfo.json
+│   ├── sellFunc.ts
+│   ├── sellPumpSwap.ts
+│   ├── senderUI.ts
+│   ├── clients/
+│   │   ├── LookupTableProvider.ts
+│   │   ├── config.ts
+│   │   └── jito.ts
+│   └── keypairs/
+│       └── keypair1.json
+└── README.md
 ```
 
-### src/
-```
- - createKeys.ts
- - createLUT.ts
- - jitoPool.ts
- - keyInfo.json
- - sellFunc.ts
- - sellPumpSwap.ts
- - senderUI.ts
-```
+## Notes
 
+- Keep sensitive secrets out of source control.
+- Validate network, RPC, and key configuration before running live flows.
+- Test with small amounts first before running larger operations.
 
-## Contact Info
-Telegram: [@Dias](https://t.me/bitman09)
+## Support
 
-LinkedIn: [@Dias Ishbulatov](https://www.linkedin.com/in/dias-ishbulatov/)
+For custom integrations or advanced workflow support, use your preferred project contact channel.
