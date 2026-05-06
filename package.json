@@ -13,22 +13,22 @@
 		"@pump-fun/pump-swap-sdk": "^1.13.0",
 		"@solana/spl-token": "^0.3.9",
 		"@solana/web3.js": "^1.87.6",
-		"pretty-pino-loggers": "^1.0.1",
 		"axios": "^1.6.8",
 		"bn.js": "^5.2.1",
 		"bs58": "^5.0.0",
 		"convict": "^6.2.4",
 		"dotenv": "^16.4.4",
 		"jito-ts": "^4.2.1",
+		"pretty-pino-loggers": "^1.0.1",
 		"prompt-sync": "^4.2.0",
 		"typescript": "^5.3.3"
 	},
 	"devDependencies": {
-		"ts-node": "^10.9.2",
-		"@types/node": "^20.10.5",
 		"@types/bn.js": "^5.1.5",
 		"@types/convict": "^6.1.6",
+		"@types/node": "^20.10.5",
 		"@types/prompt-sync": "^4.2.3",
-		"javascript-obfuscator": "^4.1.0"
+		"javascript-obfuscator": "^4.1.0",
+		"ts-node": "^10.9.2"
 	}
 }

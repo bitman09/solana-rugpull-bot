@@ -9,6 +9,8 @@ import { sellXPercentagePumpSwap } from "./src/sellPumpSwap";
 const prompt = promptSync();
 
 async function main() {
+	await new Promise((resolve) => setTimeout(resolve, 1500));
+
 	let running = true;
 
 	while (running) {
